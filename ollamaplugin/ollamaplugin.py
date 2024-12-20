@@ -1,12 +1,8 @@
-import json
-
-import requests
 import xlwings as xw
+from AI_langchain import aiLangChain
 
-OLLAMA_API_URL = "http://localhost:11434/api/generate"
 
-
-def query_ollama(model, input_text):
+def query_ollama(model, temperature, system_prompt, num_ctx, input_text):
     """Queries the Ollama API with the given model and input text.
 
     Args:
@@ -20,43 +16,48 @@ def query_ollama(model, input_text):
     Returns:
         str: The response from the Ollama API as a string.
     """
-    payload = {"model": model, "prompt": input_text}
-    response = requests.post(OLLAMA_API_URL, json=payload, stream=True)
+    chatbot = aiLangChain(model, temperature, system_prompt, num_ctx=num_ctx)
 
-    if response.status_code != 200:
-        raise Exception(f"Error: {response.text}")
-
-    full_response = ""
-
-    for line in response.iter_lines():
-        if line:
-            try:
-                chunk = json.loads(line.decode("utf-8"))
-
-                full_response += chunk.get("response", "")
-
-                if chunk.get("done", False):
-                    break
-            except json.JSONDecodeError as e:
-                raise Exception(f"Error: {e}")
-
-    return full_response.strip()
+    return chatbot.invoke(input_text)
 
 
 def main():
-    """Fetches model name from the sheet and queries Ollama API for each cell in range A2:A{last_row}."""
+    """Main function to be called by the Excel plugin."""
     wb = xw.Book.caller()
-    sheet = wb.sheets.active
-    # Read the model from cell F1
-    model = sheet["F1"].value
-    last_row = sheet.range("A" + str(sheet.cells.last_cell.row)).end("up").row
-    for cell in sheet.range(f"A2:A{last_row}"):
+
+    sheet_conf = wb.sheets[
+        "SpikeTestConfing"
+    ]  # This is the first sheet in the excel where the user will input the configuration
+    sheet_prompts = wb.sheets[
+        "SpikeTestPrompts"
+    ]  # This is the second sheet in the excel where the user will input the prompts
+    sheet_output = wb.sheets[
+        "SpikeTestOutput"
+    ]  # This is the third sheet in the excel where the output will be displayed
+
+    # Read the model from cell B1
+    model = sheet_conf["B1"].value
+    # Read the temperature from cell B2
+    temperature = float(sheet_conf["B2"].value)
+    # Read the context length from cell B3
+    num_ctx = int(sheet_conf["B3"].value)
+    system_prompt = ""
+
+    last_row = (
+        sheet_prompts.range("B" + str(sheet_prompts.cells.last_cell.row)).end("up").row
+    )
+    for i, cell in enumerate(sheet_prompts.range(f"B2:B{last_row}"), 2):
         if not cell.value:
             break
 
-        if not cell.offset(0, 1).value:
-            completion = query_ollama(model, cell.value)
-            cell.offset(0, 1).value = completion
+        if sheet_prompts["A" + str(i)].value:
+            system_prompt = sheet_prompts["A" + str(i)].value
+
+        if not sheet_output["A" + str(i)].value:
+            completion = query_ollama(
+                model, temperature, system_prompt, num_ctx, cell.value
+            )
+            sheet_output["A" + str(i)].value = completion
 
 
 if __name__ == "__main__":
